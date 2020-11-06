@@ -30,7 +30,7 @@ twitter_username: SuperScottZh
 github_username: ScottGold
 
 # Build settings
-theme: jekyll-theme-leap-day
+theme: jekyll-theme-cayman
 plugins:
   - jekyll-feed
 
