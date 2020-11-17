@@ -202,7 +202,7 @@ type MessageInfo struct {
 2. _, err := UnmarshalOptions{}.unmarshal(b, m.ProtoReflect())
 3. methods := protoMethods(m);    out, err = methods.Unmarshal(in)
 4. (mi *MessageInfo) unmarshal(in piface.UnmarshalInput);    out,err := mi.unmarshalPointer(in.Buf, p, 0, unmarshalOptions{   flags:  in.Flags,    resolver: in.Resolver})
-5. (mi *MessageInfo) unmarshalPointer(b []byte, p pointer, groupTag protowire.Number, opts unmarshalOptions);   f = mi.denseCoderFields[num];      o, err = f.funcs.unmarshal(b, p.Apply(f.offset), wtyp, f, opts) 在这里会buff进行decode，解出所有字段。这里p.Apply(f.offset)对指针偏移操作，到这里，可以想明白一点，pd.go里生成的message所有字段数据都是用指针保存，这样可以统一使用指针偏移来取到对应字段的指针。
+5. (mi *MessageInfo) unmarshalPointer(b []byte, p pointer, groupTag protowire.Number, opts unmarshalOptions);   f = mi.denseCoderFields[num];      o, err = f.funcs.unmarshal(b, p.Apply(f.offset), wtyp, f, opts) 在这里会buff进行decode，解出所有字段。这里p.Apply(f.offset)对指针偏移操作，到这里，可以想明白一点，pd.go里生成的message所有字段数据都是用指针保存，这样可以统一使用指针偏移来取到对应字段的指针。不过有点需要注意的是offset不是线性计算的，TestMsg的4个字段分别是40，56 ，64，72。有个奇怪的是string字段占用了16bits?有兴趣的可以看下offert的具体计算。
 6. f.funcs.unmarshal 会根据变量的不同，会对应不同的函数。比如string的会是consumeStringValidateUTF8，在文件里internal\impl\codec_gen.go，可以搜索func consume开始的函数。如果字段类型是个message的话，对应的unmarshal函数是consumeMessageInfo。p.SetPointer(pointerOfValue(reflect.New(f.mi.GoReflectType.Elem()))) 这里应该是new这个message的对象，并取它的指针。
 
 里面大量用到指针，主要为了减少内存拷贝，提高效率。
