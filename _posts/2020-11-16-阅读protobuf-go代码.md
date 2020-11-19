@@ -205,6 +205,17 @@ type MessageInfo struct {
 5. (mi *MessageInfo) unmarshalPointer(b []byte, p pointer, groupTag protowire.Number, opts unmarshalOptions);   f = mi.denseCoderFields[num];      o, err = f.funcs.unmarshal(b, p.Apply(f.offset), wtyp, f, opts) 在这里会buff进行decode，解出所有字段。这里p.Apply(f.offset)对指针偏移操作，到这里，可以想明白一点，pd.go里生成的message所有字段数据都是用指针保存，这样可以统一使用指针偏移来取到对应字段的指针。不过有点需要注意的是offset不是线性计算的，TestMsg的4个字段分别是40，56 ，64，72。有个奇怪的是string字段占用了16bits?有兴趣的可以看下offset的具体计算。unmarshalPointer里每次decode数据时，先取出tag，tag是一个uint62类型，包含了field number和wire type，低3位是wire type，采用protobuf整形数据的压缩算法。
 6. f.funcs.unmarshal 会根据变量的不同，会对应不同的函数。比如string的会是consumeStringValidateUTF8，在文件里internal\impl\codec_gen.go，可以搜索func consume开始的函数。如果字段类型是个message的话，对应的unmarshal函数是consumeMessageInfo。整个结构有点像棵树，所有的基本类型是叶子结点，由对应的consumeXX来decode，如果是message，则表现是个父母结点。p.SetPointer(pointerOfValue(reflect.New(f.mi.GoReflectType.Elem()))) 这里应该是new这个message的对象，并取它的指针。
 
+.pb.go里var file_xxx_proto_rawDesc是用来做什么。是FileDescriptorProto Marshal后的数据
+
+```go
+descProto := proto.Clone(f.Proto).(*descriptorpb.FileDescriptorProto)
+	descProto.SourceCodeInfo = nil // drop source code information
+
+	b, err := proto.MarshalOptions{AllowPartial: true, Deterministic: true}.Marshal(descProto)
+```
+
+运行时用unmarshalSeed解释file_xxx_proto_rawDesc，里面包含文件名，package名，message，service等信息，也就是整个文件的描述信息。
+
 里面大量用到指针，主要为了减少内存拷贝，提高效率。
 
 protobuf-go中的反射和指针使用得666，可值得调试看看。
