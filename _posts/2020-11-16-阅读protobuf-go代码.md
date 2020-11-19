@@ -218,7 +218,158 @@ descProto := proto.Clone(f.Proto).(*descriptorpb.FileDescriptorProto)
 
 里面大量用到指针，主要为了减少内存拷贝，提高效率。
 
-protobuf-go中的反射和指针使用得666，可值得调试看看。
+# 反射结构的初始化
+
+message结构反射信息初始化，Marshal和Unmarshal都要用到orderedCoderFields来遍历所有字段。
+
+internal\impl\message.go里
+
+```go
+func (mi *MessageInfo) initOnce() {
+	mi.initMu.Lock()
+	defer mi.initMu.Unlock()
+	if mi.initDone == 1 {
+		return
+	}
+
+	t := mi.GoReflectType
+	if t.Kind() != reflect.Ptr && t.Elem().Kind() != reflect.Struct {
+		panic(fmt.Sprintf("got %v, want *struct kind", t))
+	}
+	t = t.Elem()
+
+	si := mi.makeStructInfo(t) 
+	mi.makeReflectFuncs(t, si) // 函数在internal\impl\message_reflect.go
+	mi.makeCoderMethods(t, si) // orderedCoderFields的初始化，记录字段该用consumeXXX,appendXX
+
+	atomic.StoreUint32(&mi.initDone, 1)
+}
+```
+
+makeStructInfo会利用反射和struct tags（也就是.pb.go文件中，message struct字段末尾处的字符串）获得字段信息。下面是Vint32字段的struct tag。
+
+```go
+Vint32   int32    `protobuf:"varint,1,opt,name=vint32,proto3" json:"vint32,omitempty"`
+```
+
+下面是makeStructInfo函数，在internal\impl\message.go里
+
+```go
+func (mi *MessageInfo) makeStructInfo(t reflect.Type) structInfo {
+	si := structInfo{
+		sizecacheOffset: invalidOffset,
+		weakOffset:      invalidOffset,
+		unknownOffset:   invalidOffset,
+		extensionOffset: invalidOffset,
+
+		fieldsByNumber:        map[pref.FieldNumber]reflect.StructField{},
+		oneofsByName:          map[pref.Name]reflect.StructField{},
+		oneofWrappersByType:   map[reflect.Type]pref.FieldNumber{},
+		oneofWrappersByNumber: map[pref.FieldNumber]reflect.Type{},
+	}
+
+fieldLoop:
+	for i := 0; i < t.NumField(); i++ {
+		switch f := t.Field(i); f.Name {
+		case genname.SizeCache, genname.SizeCacheA:
+			if f.Type == sizecacheType {
+				si.sizecacheOffset = offsetOf(f, mi.Exporter)
+			}
+		case genname.WeakFields, genname.WeakFieldsA:
+			if f.Type == weakFieldsType {
+				si.weakOffset = offsetOf(f, mi.Exporter)
+			}
+		case genname.UnknownFields, genname.UnknownFieldsA:
+			if f.Type == unknownFieldsType {
+				si.unknownOffset = offsetOf(f, mi.Exporter)
+			}
+		case genname.ExtensionFields, genname.ExtensionFieldsA, genname.ExtensionFieldsB:
+			if f.Type == extensionFieldsType {
+				si.extensionOffset = offsetOf(f, mi.Exporter)
+			}
+		default:  // 这里
+			for _, s := range strings.Split(f.Tag.Get("protobuf"), ",") {
+				if len(s) > 0 && strings.Trim(s, "0123456789") == "" {
+					n, _ := strconv.ParseUint(s, 10, 64)
+					si.fieldsByNumber[pref.FieldNumber(n)] = f
+					continue fieldLoop
+				}
+			}
+			if s := f.Tag.Get("protobuf_oneof"); len(s) > 0 {
+				si.oneofsByName[pref.Name(s)] = f
+				continue fieldLoop
+			}
+		}
+	}
+
+	// Derive a mapping of oneof wrappers to fields.
+	oneofWrappers := mi.OneofWrappers
+	for _, method := range []string{"XXX_OneofFuncs", "XXX_OneofWrappers"} {
+		if fn, ok := reflect.PtrTo(t).MethodByName(method); ok {
+			for _, v := range fn.Func.Call([]reflect.Value{reflect.Zero(fn.Type.In(0))}) {
+				if vs, ok := v.Interface().([]interface{}); ok {
+					oneofWrappers = vs
+				}
+			}
+		}
+	}
+	for _, v := range oneofWrappers {
+...
+	}
+
+	return si
+}
+```
+
+在internal\impl\codec_message.go里，makeCoderMethods函数中
+
+```go
+			fieldOffset = offsetOf(fs, mi.Exporter)
+			childMessage, funcs = fieldCoder(fd, ft) // *
+		}
+		cf := &preallocFields[i]
+		*cf = coderFieldInfo{
+			num:        fd.Number(),
+			offset:     fieldOffset,
+			wiretag:    wiretag,
+			ft:         ft,
+			tagsize:    protowire.SizeVarint(wiretag),
+			funcs:      funcs, // *
+			mi:         childMessage,
+			validation: newFieldValidationInfo(mi, si, fd, ft),
+			isPointer:  fd.Cardinality() == pref.Repeated || fd.HasPresence(),
+			isRequired: fd.Cardinality() == pref.Required,
+		}
+		mi.orderedCoderFields = append(mi.orderedCoderFields, cf) // *
+		mi.coderFields[cf.num] = cf
+```
+
+函数fieldCoder会根据字段类型选择不同的pointerCoderFuncs，下面是uint32字段的。
+
+```go
+var coderUint32 = pointerCoderFuncs{
+	size:      sizeUint32, //计算字段大小
+	marshal:   appendUint32, //序列化字段
+	unmarshal: consumeUint32,//反序列号字段
+	merge:     mergeUint32,//合并吧
+}
+```
 
 
+
+加菜，getMessageInfo里判断类型和是否有某个接口的写法：
+
+```go
+func getMessageInfo(mt reflect.Type) *MessageInfo {
+	m, ok := reflect.Zero(mt).Interface().(pref.ProtoMessage)
+	if !ok {
+		return nil
+	}
+	mr, ok := m.ProtoReflect().(interface{ ProtoMessageInfo() *MessageInfo })
+	if !ok {
+		return nil
+	}
+	return mr.ProtoMessageInfo()
+}
+```
 
