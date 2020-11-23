@@ -357,6 +357,24 @@ var coderUint32 = pointerCoderFuncs{
 
 
 
+根据一个proto  message和field id得到它field的类型
+
+```go
+m := TestMsg{}
+md := m.ProtoReflect().Descriptor()
+fd := md.Fields().ByNumber(protoreflect.FieldNumber(fieldid))
+if fd == nil {
+	return nil
+}
+v := m.Mutable(fd)
+lmi, ok := v.Interface().(interface{ LoadMessageInfo() *protoimpl.MessageInfo })
+if !ok {
+	return nil
+}
+ms := lmi.LoadMessageInfo()
+fmt.Println("GoReflectType", ms.GoReflectType)
+```
+
 加菜，getMessageInfo里判断类型和是否有某个接口的写法：
 
 ```go
