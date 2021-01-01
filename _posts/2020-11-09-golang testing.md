@@ -150,3 +150,11 @@ func TestGroupedParallel(t *testing.T) {
 func TestMain(m *testing.M)
 ```
 
+#   有用的命令
+
+运行所有当前目录和子目录的tests。
+
+```
+go test ./...
+```
+
